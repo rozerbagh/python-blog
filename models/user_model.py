@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String
 from db import Base
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class User(Base):
     __tablename__ = "users"
@@ -25,3 +25,10 @@ class UserResponse(BaseModel):
 class UserListResponse(BaseModel):
     message: str
     data: List[UserResponse]
+
+
+class UserUpdateModel(BaseModel):
+    fullname: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    phone: Optional[str] = None

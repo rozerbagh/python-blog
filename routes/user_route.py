@@ -1,11 +1,13 @@
 from fastapi import APIRouter
 from fastapi import HTTPException, Depends, status
-from typing import List
+from fastapi.responses import JSONResponse
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from models import UserBaseModel, UserModel, UserListResponse
+from models import UserBaseModel, UserModel, UserListResponse, UserUpdateModel
 from db.db import get_db
+from routes.auth_routes import get_current_user
+from utils.security import hash_password
 
 # Create router instance
 router = APIRouter(
@@ -14,17 +16,17 @@ router = APIRouter(
 )
 
 
-@router.get("/",response_model=UserListResponse)
+@router.get("/", response_model=UserListResponse)
 async def list_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(UserModel))
     users = result.scalars().all()
     if not users:
         raise HTTPException(status_code=404, detail="No users found")
-    return {"message": "List of all users","data": users}
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "List of all users", "data": users})
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: int,db: AsyncSession = Depends(get_db)):
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db), current_user=Depends(get_current_user)):
     result = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = result.scalar_one_or_none()  # fetch single row or None
     if not user:
@@ -34,43 +36,45 @@ async def get_user(user_id: int,db: AsyncSession = Depends(get_db)):
         )
 
         # Optionally, exclude sensitive info like password
-    return {
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
         "id": user.id,
         "fullname": user.fullname,
         "email": user.email,
         "phone": user.phone
-    }
+    })
 
 
-@router.post("/")
-async def create_user(user: UserBaseModel ,db: AsyncSession = Depends(get_db)):
+@router.patch("/{user_id}")
+async def update_user(user_id: int, user_update: UserUpdateModel, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Update fields dynamically
+    update_data = user_update.dict(exclude_unset=True)
+
+    if "password" in update_data:
+        update_data["password"] = hash_password(update_data["password"])
+
+    for key, value in update_data.items():
+        setattr(user, key, value)
+
     try:
-        new_user = UserModel(fullname=user.fullname, password=user.password, email=user.email, phone=user.phone)
-        db.add(new_user)
         await db.commit()
-        await db.refresh(new_user)
-        return {"message": "User created", "data": new_user}
+        await db.refresh(user)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Email already exists")
 
-    # except IntegrityError:
-    #     # Example: unique constraint violation (duplicate email)
-    #     await db.rollback()
-    #     raise HTTPException(
-    #         status_code=status.HTTP_400_BAD_REQUEST,
-    #         detail="User with this email already exists"
-    #     )
-    #
-    # except SQLAlchemyError as e:
-    #     # Catch all other SQL errors
-    #     await db.rollback()
-    #     raise HTTPException(
-    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    #         detail=f"Database error: {str(e)}"
-    #     )
+    return JSONResponse(status_code=status.HTTP_200_OK, content={
+        "message": "User updated successfully",
+        "data": {
+            "id": user.id,
+            "fullname": user.fullname,
+            "email": user.email,
+            "phone": user.phone,
+        }
+    })
 
-    except Exception as e:
-        print(e)
-        # Any unexpected error
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
-        )
